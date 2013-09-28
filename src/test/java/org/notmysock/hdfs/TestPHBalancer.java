@@ -34,6 +34,8 @@ import org.apache.hadoop.hdfs.server.common.*;
 import org.apache.hadoop.security.*;
 import org.apache.hadoop.security.token.*;
 
+import org.apache.log4j.*;
+
 public class TestPHBalancer {
   private MiniDFSCluster cluster;
   private Configuration conf;
@@ -42,7 +44,13 @@ public class TestPHBalancer {
   private FileSystem fs;
   private byte[] buffer = "That trout lay shattered into a thousand fragments—I say a thousand, but they may have only been nine hundred.  I did not count them.".getBytes(); 
 
-  @Before
+  static {
+    Logger rootLogger = Logger.getRootLogger();
+    rootLogger.setLevel(Level.DEBUG);
+    rootLogger.addAppender(new ConsoleAppender(
+               new PatternLayout("%-6r [%p] %c - %m%n")));
+  }
+
   public void init() throws IOException {
     conf = new HdfsConfiguration();
     conf.setLong(DFSConfigKeys.DFS_BLOCK_SIZE_KEY, 16);
@@ -57,7 +65,6 @@ public class TestPHBalancer {
     fs = cluster.getFileSystem();
   }
 
-  @After
   public void teardown() throws IOException {
     fs.close();
     cluster.shutdown();
@@ -74,6 +81,7 @@ public class TestPHBalancer {
 
   @Test
   public void testBalance() throws IOException {
+    init();
     createFile("/a.txt");
     createFile("/b.txt");
     RawProtocolWrapper pw = new RawProtocolWrapper(fs);
@@ -83,9 +91,20 @@ public class TestPHBalancer {
 
     TreeSet<DatanodeInfo> hosts = new TreeSet<DatanodeInfo>(); 
     for(RawProtocolWrapper.BlockWithLocation block: blocks) {
-      System.out.println(block.toString());
+      //System.out.println(block.toString());
       hosts.addAll(Arrays.asList(block.locations));
     }
 
+    DatanodeInfo[] all = hosts.toArray(new DatanodeInfo[4]);
+    for(RawProtocolWrapper.BlockWithLocation block: blocks) {
+      List<DatanodeInfo> locations = Arrays.asList(block.locations);
+      for(DatanodeInfo h: all) {
+        if(locations.indexOf(h) == -1) {                
+          RawProtocolWrapper.ScheduledMove mv = pw.move(block, locations.get(0), h);           
+          mv.dispatch();
+          break;
+        }
+      }
+    }
   }
 }

@@ -28,7 +28,7 @@
         <activeByDefault>true</activeByDefault>
       </activation>
       <properties>
-      	<hadoop.version>2.1.0-beta</hadoop.version>
+      	<hadoop.version>2.1.1-SNAPSHOT</hadoop.version>
       </properties>
     </profile>
   </profiles>

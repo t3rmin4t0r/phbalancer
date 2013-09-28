@@ -51,6 +51,7 @@ public class RawProtocolWrapper {
     public final long genstamp;
     public final boolean corrupt;
     public final DatanodeInfo[] locations;
+
     private BlockWithLocation(
       String poolId, 
       long blkid,
@@ -78,7 +79,7 @@ public class RawProtocolWrapper {
 
     public static BlockWithLocation create(LocatedBlock lb) {
       DatanodeInfo[] locations = lb.getLocations();
-      long len = lb.getBlockSize();
+      long len = lb.getBlock().getNumBytes();
       boolean corrupt = lb.isCorrupt();
       String poolId = lb.getBlock().getBlockPoolId();
       long blkid = lb.getBlock().getBlockId();
@@ -135,7 +136,8 @@ public class RawProtocolWrapper {
         
         sendRequest(out);
         receiveResponse(in);
-      } catch (IOException e) {
+      } catch (Exception e) {
+        e.printStackTrace();
       } finally {
         IOUtils.closeStream(out);
         IOUtils.closeStream(in);
@@ -146,9 +148,9 @@ public class RawProtocolWrapper {
      
     /* Send a block replace request to the output stream*/
     private void sendRequest(DataOutputStream out) throws IOException {
-      final ExtendedBlock eb = new ExtendedBlock(blockpoolID, block.blkid);
+      final ExtendedBlock eb = new ExtendedBlock(block.poolId, block.blkid, block.len, block.genstamp);
       final Token<BlockTokenIdentifier> accessToken = getAccessToken(eb);
-      new Sender(out).replaceBlock(eb, accessToken, src.getStorageID(), dst);
+      new Sender(out).replaceBlock(eb, accessToken, src.getStorageID(), src);
     }
     
     /* Receive a block copy response from the input stream */ 

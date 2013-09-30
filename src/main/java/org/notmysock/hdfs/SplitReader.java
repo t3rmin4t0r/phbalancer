@@ -44,7 +44,7 @@ public class SplitReader {
       String[] components = formatted.split("[:+]");
       Path file;
       long start = 0;
-      long length = -1;
+      long length = Long.MAX_VALUE;
       switch(components.length) {
         case 3: {
           length = Long.valueOf(components[2]);          

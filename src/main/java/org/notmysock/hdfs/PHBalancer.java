@@ -41,7 +41,7 @@ public class PHBalancer extends Configured implements Tool {
         options.addOption("s","splits", true, "splits");
         options.addOption("p", "parallel", true, "parallel");
         options.addOption("x", "strategy", true, "strategy");
-        options.addOption("n", "dryrun", true, "dryrun");
+        options.addOption("n", "dryrun", false, "dryrun");
         CommandLine line = parser.parse(options, remainingArgs);
 
         if(!(line.hasOption("splits"))) {

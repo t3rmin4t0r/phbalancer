@@ -20,6 +20,9 @@ import java.util.*;
 import java.net.*;
 import java.math.*;
 import java.security.*;
+import java.util.concurrent.*;
+
+import org.notmysock.hdfs.RawProtocolWrapper.*;
 
 public class PHBalancer extends Configured implements Tool {
     public static void main(String[] args) throws Exception {
@@ -37,6 +40,8 @@ public class PHBalancer extends Configured implements Tool {
         org.apache.commons.cli.Options options = new org.apache.commons.cli.Options();
         options.addOption("s","splits", true, "splits");
         options.addOption("p", "parallel", true, "parallel");
+        options.addOption("x", "strategy", true, "strategy");
+        options.addOption("n", "dryrun", true, "dryrun");
         CommandLine line = parser.parse(options, remainingArgs);
 
         if(!(line.hasOption("splits"))) {
@@ -47,26 +52,37 @@ public class PHBalancer extends Configured implements Tool {
         
         File splits = new File(line.getOptionValue("splits"));
         int parallel = 1;
+        boolean dryrun = line.hasOption("dryrun");
 
         if(line.hasOption("parallel")) {
           parallel = Integer.parseInt(line.getOptionValue("parallel"));
-        }        
+        }
 
         List<SplitReader.FutureSplit[]> parsed = SplitReader.parse(splits);
         FileSystem fs = FileSystem.get(conf);
         RawProtocolWrapper pw = new RawProtocolWrapper(fs);
+        BalancerStrategy strategy = new LeastMoveStrategy(pw);
 
         for(FileSplit[] s: parsed) {
-          ArrayList<RawProtocolWrapper.BlockWithLocation> blocks = new ArrayList<RawProtocolWrapper.BlockWithLocation>();
+          ArrayList<BlockWithLocation> blocks = new ArrayList<BlockWithLocation>();
           for(FileSplit f: s) {
             blocks.addAll(Arrays.asList(pw.getLocations(f.getPath().toString(), f.getStart(), f.getLength())));
           }
-          System.out.println("{");
-          for(RawProtocolWrapper.BlockWithLocation block: blocks) {
-            System.out.println(block.toString() + ",");
-          }
-          System.out.println("},");
+          strategy.group(blocks.toArray(new BlockWithLocation[0]));
         }
+        ScheduledMove[] plan = strategy.plan();
+
+        ExecutorService pool = Executors.newFixedThreadPool(parallel);
+
+        for(ScheduledMove mv: plan) {
+          System.out.println(mv);
+          if(!dryrun) {
+            System.out.println("Moving " + mv);
+            pool.submit((Runnable)mv);
+          }
+        }
+
+        pool.shutdown();
         return 0;
     }
 }

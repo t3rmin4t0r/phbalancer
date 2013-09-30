@@ -43,6 +43,7 @@ public class RawProtocolWrapper {
   final boolean encryptDataTransfer;
   final BlockTokenSecretManager blockTokenSecretManager;
   final DataEncryptionKey encryptionKey;
+  final NetworkTopology cluster;
 
   public static class BlockWithLocation {
     public final String poolId; 
@@ -50,7 +51,7 @@ public class RawProtocolWrapper {
     public final long len;
     public final long genstamp;
     public final boolean corrupt;
-    public final DatanodeInfo[] locations;
+    public final Datanode[] locations;
 
     private BlockWithLocation(
       String poolId, 
@@ -58,7 +59,7 @@ public class RawProtocolWrapper {
       long len,
       long genstamp,
       boolean corrupt,
-      DatanodeInfo[] locations
+      Datanode[] locations
     ) {
       this.poolId = poolId;
       this.blkid = blkid;
@@ -71,14 +72,23 @@ public class RawProtocolWrapper {
     public String toString() {
       String[] hosts = new String[locations.length];
       int i = 0;
-      for(DatanodeInfo dn: locations) {
+      for(Datanode dn: locations) {
         hosts[i++] = String.format("\"%s\"", dn.toString());
       }
       return String.format("\"%s:%d\": [%s]", poolId, blkid, StringUtils.join(",", hosts));
     }
 
+    public ExtendedBlock getBlock() {
+      return new ExtendedBlock(this.poolId, this.blkid, this.len, this.genstamp);
+    }
+
     public static BlockWithLocation create(LocatedBlock lb) {
-      DatanodeInfo[] locations = lb.getLocations();
+      DatanodeInfo[] nodes = lb.getLocations();
+      Datanode[] locations = new Datanode[nodes.length];
+      int i = 0;
+      for(DatanodeInfo dn: nodes) {
+        locations[i++] = new Datanode(dn);
+      }
       long len = lb.getBlock().getNumBytes();
       boolean corrupt = lb.isCorrupt();
       String poolId = lb.getBlock().getBlockPoolId();
@@ -96,10 +106,43 @@ public class RawProtocolWrapper {
     }
   }
 
-  public class ScheduledMove {
+  public static class Datanode implements Comparable<Datanode> {
+    public final DatanodeInfo node;
+    public Datanode(DatanodeInfo node) {
+      this.node = node;
+    }
+    public String getRack() {
+      return this.node.getNetworkLocation();
+    }
+    @Override
+    public String toString() {
+      return node.toString();
+    }
+    @Override
+    public boolean equals(Object o1) {
+      if(this == o1) {
+        return true;
+      }
+      if(o1 instanceof Datanode) {
+        return node.equals(((Datanode)(o1)).node);
+      }
+      return false;
+    }
+    @Override
+    public int compareTo(Datanode o1) {
+      return node.compareTo(o1.node);
+    }
+    @Override 
+    public int hashCode() {
+      return node.hashCode();
+    }
+  }
+
+  public class ScheduledMove implements Runnable {
     public final BlockWithLocation block;
     public final DatanodeInfo src;
     public final DatanodeInfo dst;
+    private DatanodeInfo proxy;
     public ScheduledMove(
       BlockWithLocation block,
       DatanodeInfo src,
@@ -108,6 +151,28 @@ public class RawProtocolWrapper {
       this.block = block;
       this.src = src;
       this.dst = dst;
+      this.proxy = findProxy();
+    }
+
+    public DatanodeInfo findProxy() {
+      if(cluster.isOnSameRack(src, dst)) {
+        return src;
+      }
+      /* try to move data from the same rack */
+      for(Datanode h: block.locations) {
+        if(dst.equals(h.node) || src.equals(h.node)) {
+          continue;
+        }
+        if(cluster.isOnSameRack(dst, h.node)) {
+          return h.node;
+        }
+      }
+      // give up
+      return src;
+    }
+
+    public void run() {
+      dispatch();
     }
 
     public void dispatch() {
@@ -148,9 +213,9 @@ public class RawProtocolWrapper {
      
     /* Send a block replace request to the output stream*/
     private void sendRequest(DataOutputStream out) throws IOException {
-      final ExtendedBlock eb = new ExtendedBlock(block.poolId, block.blkid, block.len, block.genstamp);
+      final ExtendedBlock eb = block.getBlock();
       final Token<BlockTokenIdentifier> accessToken = getAccessToken(eb);
-      new Sender(out).replaceBlock(eb, accessToken, src.getStorageID(), src);
+      new Sender(out).replaceBlock(eb, accessToken, src.getStorageID(), proxy);
     }
     
     /* Receive a block copy response from the input stream */ 
@@ -164,6 +229,11 @@ public class RawProtocolWrapper {
         throw new IOException("block move failed: " +
             response.getMessage());
       }
+    }
+
+    @Override
+    public String toString() {
+      return String.format("[%s] %s -> %s", block, src, dst);
     }
 
   }
@@ -202,6 +272,7 @@ public class RawProtocolWrapper {
     } else {
       this.encryptionKey = null;
     }
+    this.cluster = NetworkTopology.getInstance(fs.getConf());
   }
 
   /** Get an access token for a block. */
@@ -218,9 +289,9 @@ public class RawProtocolWrapper {
     }
   }
 
-  public ScheduledMove move(BlockWithLocation block, DatanodeInfo src, DatanodeInfo dst) 
+  public ScheduledMove move(BlockWithLocation block, Datanode src, Datanode dst) 
     throws IOException {
-    return new ScheduledMove(block, src, dst);
+    return new ScheduledMove(block, src.node, dst.node);
   }
 
   public BlockWithLocation[] getLocations(String file, long start, long length) throws IOException {

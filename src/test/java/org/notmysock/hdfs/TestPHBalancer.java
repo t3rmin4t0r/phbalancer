@@ -25,6 +25,7 @@ import java.util.*;
 import java.net.*;
 import java.math.*;
 import java.security.*;
+import java.util.concurrent.*;
 
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.protocol.*;
@@ -36,19 +37,25 @@ import org.apache.hadoop.security.token.*;
 
 import org.apache.log4j.*;
 
+import org.notmysock.hdfs.*;
+import org.notmysock.hdfs.RawProtocolWrapper.*;
+
 public class TestPHBalancer {
   private MiniDFSCluster cluster;
   private Configuration conf;
   private int nodes = 4;
   private String[] racks = {"/rack0", "/rack0", "/rack1", "/rack1"};
   private FileSystem fs;
-  private byte[] buffer = "That trout lay shattered into a thousand fragments—I say a thousand, but they may have only been nine hundred.  I did not count them.".getBytes(); 
+  private byte[] buffer = "That trout lay shattered into a thousand fragments — I say a thousand, but they may have only been nine hundred.  I did not count them.".getBytes(); 
+
+  private static Logger LOG = Logger.getLogger(TestPHBalancer.class);
 
   static {
     Logger rootLogger = Logger.getRootLogger();
-    rootLogger.setLevel(Level.DEBUG);
+    rootLogger.setLevel(Level.WARN);
     rootLogger.addAppender(new ConsoleAppender(
                new PatternLayout("%-6r [%p] %c - %m%n")));
+    LOG.setLevel(Level.INFO);
   }
 
   public void init() throws IOException {
@@ -77,10 +84,55 @@ public class TestPHBalancer {
     FSDataOutputStream out = fs.create(f);
     out.write(buffer);
     out.close();  
+    try {
+      DFSTestUtil.waitReplication(fs, f, (short)3);
+    } catch(InterruptedException ie) {
+      ie.printStackTrace();
+    } catch(TimeoutException te) {
+      te.printStackTrace();
+    }
   }
 
   @Test
-  public void testBalance() throws IOException {
+  public void testBalancer() throws IOException {
+    init();
+    RawProtocolWrapper pw = new RawProtocolWrapper(fs);
+    BalancerStrategy bs = new LeastMoveStrategy(pw);
+    ArrayList<BlockWithLocation> blocks = new ArrayList<BlockWithLocation>();
+    char[] abc = {'a', 'b', 'c'};
+    for(char c: abc) {
+      String path = String.format("/%c.txt", c);
+      createFile(path);
+      blocks.addAll(Arrays.asList(pw.getLocations(path, 0, buffer.length)));
+    }
+    bs.group(blocks.toArray(new BlockWithLocation[0]));
+    int moves = 0;
+    for(ScheduledMove mv: bs.plan()) {
+      mv.dispatch();
+      moves++;
+    }
+
+    Set<Datanode> hosts = null;
+    for(char c: abc) {
+      String path = String.format("/%c.txt", c);
+      for(BlockWithLocation bloc: pw.getLocations(path, 0, buffer.length)) {
+        if(hosts == null) {
+          hosts = new HashSet<Datanode>();
+          hosts.addAll(Arrays.asList(bloc.locations));
+        } else {
+          hosts.retainAll(Arrays.asList(bloc.locations));
+        }
+      }
+    } 
+    LOG.info("Balanced " + blocks.size() + " blocks in " + moves + " moves");
+    if(hosts.size() < 2) {
+      //one node per rack
+      fail("LeastMoveBalancing failed to produce at least 2 nodes with data locality");
+    }
+  }
+
+  @Test
+  public void testMove() throws IOException {
     init();
     createFile("/a.txt");
     createFile("/b.txt");
@@ -89,18 +141,19 @@ public class TestPHBalancer {
     blocks.addAll(Arrays.asList(pw.getLocations("/a.txt", 0, buffer.length)));
     blocks.addAll(Arrays.asList(pw.getLocations("/b.txt", 0, buffer.length)));
 
-    TreeSet<DatanodeInfo> hosts = new TreeSet<DatanodeInfo>(); 
+    TreeSet<Datanode> hosts = new TreeSet<Datanode>(); 
     for(RawProtocolWrapper.BlockWithLocation block: blocks) {
-      //System.out.println(block.toString());
       hosts.addAll(Arrays.asList(block.locations));
     }
 
-    DatanodeInfo[] all = hosts.toArray(new DatanodeInfo[4]);
+    Datanode[] all = hosts.toArray(new Datanode[0]);
+
     for(RawProtocolWrapper.BlockWithLocation block: blocks) {
-      List<DatanodeInfo> locations = Arrays.asList(block.locations);
-      for(DatanodeInfo h: all) {
-        if(locations.indexOf(h) == -1) {                
-          RawProtocolWrapper.ScheduledMove mv = pw.move(block, locations.get(0), h);           
+      List<Datanode> locations = Arrays.asList(block.locations);
+      for(Datanode h: all) {
+        if(locations.indexOf(h) == -1) {
+          // move randomly, almost
+          RawProtocolWrapper.ScheduledMove mv = pw.move(block, locations.get(0), h);
           mv.dispatch();
           break;
         }

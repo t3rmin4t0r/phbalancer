@@ -40,7 +40,8 @@ public class PHBalancer extends Configured implements Tool {
         org.apache.commons.cli.Options options = new org.apache.commons.cli.Options();
         options.addOption("s","splits", true, "splits");
         options.addOption("p", "parallel", true, "parallel");
-        options.addOption("x", "strategy", true, "strategy");
+        options.addOption("x", "strategy", true, "strategy [leastmove,fair,concentrate]");
+        options.addOption("c", "concentrate", true, "concentrate");
         options.addOption("n", "dryrun", false, "dryrun");
         CommandLine line = parser.parse(options, remainingArgs);
 
@@ -58,10 +59,15 @@ public class PHBalancer extends Configured implements Tool {
           parallel = Integer.parseInt(line.getOptionValue("parallel"));
         }
 
+
         List<SplitReader.FutureSplit[]> parsed = SplitReader.parse(splits);
         FileSystem fs = FileSystem.get(conf);
         RawProtocolWrapper pw = new RawProtocolWrapper(fs);
         BalancerStrategy strategy = new LeastMoveStrategy(pw);
+        if(line.hasOption("concentrate")) {
+          String[] hosts = line.getOptionValue("concentrate").split(",");
+          strategy = new ConcentrateStrategy(pw, hosts);
+        }
 
         for(FileSplit[] s: parsed) {
           ArrayList<BlockWithLocation> blocks = new ArrayList<BlockWithLocation>();
@@ -77,12 +83,12 @@ public class PHBalancer extends Configured implements Tool {
         for(ScheduledMove mv: plan) {
           System.out.println(mv);
           if(!dryrun) {
-            System.out.println("Moving " + mv);
             pool.submit((Runnable)mv);
           }
         }
 
         pool.shutdown();
+        pool.awaitTermination(1, TimeUnit.HOURS);
         return 0;
     }
 }

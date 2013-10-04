@@ -172,6 +172,7 @@ public class RawProtocolWrapper {
     }
 
     public void run() {
+      System.out.println("Running " + this);
       dispatch();
     }
 
@@ -307,5 +308,15 @@ public class RawProtocolWrapper {
     } catch(Exception e) {
       throw new IOException(e);
     }
+  }
+
+  public Datanode[] getDataNodes() throws IOException {
+    DatanodeInfo[] nodes = client.getDatanodeReport(HdfsConstants.DatanodeReportType.LIVE);
+    Datanode[] dnodes = new Datanode[nodes.length];
+    int i = 0;
+    for(DatanodeInfo dn: nodes) {
+      dnodes[i++] = new Datanode(dn);
+    }
+    return dnodes;
   }
 }
